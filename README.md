@@ -1,82 +1,84 @@
-# Databricks + PokeAPI: Arquitetura Medalhão
+# ⚡ Databricks + PokeAPI: Arquitetura Medalhão
 
-Este projeto apresenta um pipeline de dados completo construído no **Databricks**, utilizando a **PokeAPI** como fonte de dados. A estrutura segue a **Arquitetura Medalhão (Medallion)**, transformando dados crus em insights analíticos prontos para dashboards.
-
----
-
-## 1. Visão Geral da Arquitetura
-
-O fluxo consiste na ingestão de dados via API e processamento em três camadas distintas dentro do **Delta Lake**:
-
-* **Bronze**: Dados crus (Raw) em formato JSON.
-* **Silver**: Dados limpos, tipados e normalizados em tabelas relacionais.
-* **Gold**: Tabelas agregadas com métricas de negócio, rankings e tier lists.
-
-### Organização de Dados
-* **Catálogo:** `pokemons`
-* **Schemas:** `bronze`, `silver`, `gold`
+Este projeto demonstra a implementação de um pipeline de dados completo utilizando a **PokeAPI** e o ecossistema **Databricks**. O objetivo é aplicar os conceitos da **Arquitetura Medalhão (Medallion)** para transformar dados brutos de uma API em tabelas analíticas refinadas.
 
 ---
 
-## 2. Camada Bronze (Ingestão)
+## 🏗️ 1. Visão Geral da Arquitetura
 
-### Objetivo
-Atuar como a "Single Source of Truth". Armazenamos o JSON original para garantir que qualquer mudança de regra de negócio permita o reprocessamento total dos dados.
+O pipeline utiliza o **Delta Lake** para gerenciar o armazenamento em três camadas lógicas:
 
-**Estrutura da Tabela `bronze.pokemon_raw`:**
+- **🥉 Bronze**: Dados crus em formato JSON, preservando a fidelidade da fonte.
+- **🥈 Silver**: Dados limpos e normalizados em tabelas relacionais (Pokémon, Tipos e Stats).
+- **🥇 Gold**: Tabelas prontas para análise, com métricas de poder, rankings e tiers (S/A/B/C).
+
+### Organização de Catálogo e Schemas
+- **Catálogo**: `pokemons`
+- **Schemas**: `bronze`, `silver`, `gold`
+
+---
+
+## 📥 2. Camada Bronze – Ingestão
+
+**Objetivo:** Persistir os dados da PokeAPI sem transformações destrutivas.
+
+- **Método:** O JSON é capturado via `response.text` e armazenado como `STRING`.
+- **Metadados:** Inclusão de colunas como `pokemon_id`, `ingestion_date`, `api_status_code` e `source_system`.
 
 | Coluna | Tipo | Descrição |
-| :--- | :--- | :--- |
-| `pokemon_id` | INT | Identificador único do Pokémon |
-| `raw_json` | STRING | JSON completo da PokeAPI (`response.text`) |
-| `ingestion_date` | DATE | Data da carga (Partição) |
-| `ingestion_ts` | TIMESTAMP | Timestamp exato da ingestão |
-| `api_status_code`| INT | Código de retorno da requisição HTTP |
+|---|---|---|
+| `pokemon_id` | int | ID do Pokémon |
+| `raw_json` | string | JSON completo da API |
+| `ingestion_ts` | timestamp | Carimbo de tempo da carga |
 
 ---
 
-## 3. Camada Silver (Normalização)
+## ⚙️ 3. Camada Silver – Limpeza e Normalização
 
-Nesta etapa, utilizamos o comando `from_json` do PySpark com um schema pré-definido para estruturar os dados.
+A Silver transforma o JSON cru em tabelas estruturadas utilizando `from_json` com um schema pré-definido.
 
-### Principais Tabelas
-1.  **`silver.pokemon`**: Atributos principais como altura, peso e experiência base.
-2.  **`silver.pokemon_types`**: Tabela normalizada (N:1) criada através da função `explode()`, permitindo múltiplos tipos por Pokémon.
-3.  **`silver.pokemon_stats`**: Valores base de HP, Attack, Defense, Special-Attack, Special-Defense e Speed.
+### 📊 Tabelas Principais:
+1.  **`silver.pokemon`**: Atributos básicos (`height`, `weight`, `base_experience`).
+2.  **`silver.pokemon_types`**: Relação normalizada Pokémon x Tipo (via `explode`).
+3.  **`silver.pokemon_stats`**: Stats base (HP, Attack, etc.) normalizados por linha.
 
-**Exemplo de Normalização de Tipos:**
-| pokemon_id | type_slot | type_name |
-| :--- | :--- | :--- |
-| 1 | 1 | grass |
-| 1 | 2 | poison |
-| 6 | 1 | fire |
+> **Boas Práticas:** Filtramos registros nulos e particionamos as tabelas por `ingestion_date` para otimizar o reprocessamento.
 
 ---
 
-## 4. Camada Gold (Business & Analytics)
+## 🏆 4. Camada Gold – Métricas e Rankings
 
-A camada Gold é onde a mágica acontece para o usuário final. Criamos métricas complexas e classificações.
+Aqui os dados são transformados em valor de negócio através de **Window Functions** do PySpark.
 
-### Métricas e Rankings
-* **Total Power**: Soma de todos os stats base ($HP + ATK + DEF + SP.ATK + SP.DEF + SPEED$).
-* **Tier List**: Aplicação de **Window Functions** (`ntile(4)`) para classificar os Pokémon em categorias de força:
-    * **Tier S**: Top 25% mais fortes.
-    * **Tier A/B**: Intermediários.
-    * **Tier C**: Bottom 25% (Pokémon iniciais ou com stats reduzidos).
+- **Cálculo de Poder:** `total_power` é a soma de todos os stats base.
+- **Tier List:** Divisão dos Pokémon em quartis utilizando `ntile(4)`:
+    - **Tier S**: Top 25% (Lendários e elites).
+    - **Tier A/B/C**: Distribuição baseada na performance estatística.
+- **Ranking por Tipo:** Média de poder por tipo primário para identificar as classes mais fortes.
 
 ---
 
-## 📊 5. Consultas e Dashboards
+## 🔍 5. Consultas e Dashboards (Databricks SQL)
 
-As tabelas Gold são consumidas via **Databricks SQL**. Exemplo de query para o Top 5:
+Exemplos de consultas que alimentam o dashboard:
 
 ```sql
-SELECT 
-    name_clean AS name, 
-    primary_type, 
-    total_power, 
-    tier_label
-FROM pokemons.gold.pokemon_tier_list
-ORDER BY total_power DESC
+-- Top 5 Pokémon mais fortes
+SELECT name_clean, primary_type, total_power, tier_label 
+FROM pokemons.gold.pokemon_tier_list 
+ORDER BY total_power DESC 
 LIMIT 5;
+
+-- Comparativo de força média por tipo
+SELECT primary_type, avg_total_power, pokemon_count 
+FROM pokemons.gold.type_power_ranking 
+ORDER BY avg_total_power DESC;
 ```
+
+## 6. Orquestração com Workflows
+
+O pipeline é automatizado através de um Databricks Job com três tarefas sequenciais:
+
+- Task 1 (Bronze): Notebook de Ingestão.
+- Task 2 (Silver): Notebook de Normalização.
+- Task 3 (Gold): Notebook Analítico.
