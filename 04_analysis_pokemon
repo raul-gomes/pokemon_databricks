@@ -1,0 +1,54 @@
+CREATE OR REPLACE VIEW pokemons.gold.vw_pokemon_top_ranking AS
+SELECT 
+  a.name,
+  b.primary_type,
+  b.total_power,
+  b.tier_label,
+  b.rank_overall,
+  a.attack,
+  a.defense,
+  a.hp
+FROM pokemons.gold.pokemon_overview as a, pokemons.gold.pokemon_tier_list as b
+WHERE tier_label IN ('S', 'A') AND a.pokemon_id=b.pokemon_id
+ORDER BY total_power DESC;
+
+CREATE OR REPLACE VIEW pokemons.gold.vw_type_power_comparison AS
+SELECT 
+  primary_type,
+  pokemon_count,
+  average_total_power,
+  avg_attack,
+  avg_defense,
+  avg_hp,
+  avg_speed,
+  -- Métricas derivadas úteis pro dashboard
+  (avg_attack + avg_defense) / 2 AS balance_score
+FROM pokemons.gold.type_power_ranking
+ORDER BY average_total_power DESC;
+
+
+CREATE OR REPLACE VIEW pokemons.gold.vw_pokemon_attack_defense AS
+SELECT 
+  a.name,
+  a.primary_type,
+  a.attack,
+  a.defense,
+  a.total_power,
+  b.tier_label,
+  -- Glass cannon = alto attack, baixa defense
+  CASE 
+    WHEN attack > 100 AND defense < 60 THEN 'glass_cannon'
+    WHEN defense > 100 AND attack < 60 THEN 'tank'
+    ELSE 'balanced'
+  END as playstyle
+FROM pokemons.gold.pokemon_overview as a, pokemons.gold.pokemon_tier_list as b
+WHERE a.total_power > 400 and a.pokemon_id=b.pokemon_id
+ORDER BY total_power DESC;
+
+CREATE OR REPLACE VIEW pokemons.gold.vw_pokemon_summary AS
+SELECT 
+  COUNT(*) as total_pokemon,
+  COUNT(CASE WHEN tier_label = 'S' THEN 1 END) as s_tier_count,
+  ROUND(AVG(total_power), 1) as avg_power_all,
+  (SELECT primary_type FROM pokemons.gold.type_power_ranking ORDER BY average_total_power DESC LIMIT 1) as strongest_type
+FROM pokemons.gold.pokemon_tier_list;
