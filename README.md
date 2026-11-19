@@ -24,6 +24,8 @@ O pipeline utiliza o **Delta Lake** para gerenciar o armazenamento em três cama
 
 - **Método:** O JSON é capturado via `response.text` e armazenado como `STRING`.
 - **Metadados:** Inclusão de colunas como `pokemon_id`, `ingestion_date`, `api_status_code` e `source_system`.
+- **Falhas de rede:** a requisição que falha vira uma linha com `raw_json` e `api_status_code` nulos; a carga continua.
+- **Carga idempotente:** a escrita usa `replaceWhere` na partição `ingestion_date`, então rodar a mesma data de novo substitui a carga em vez de duplicá-la.
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
@@ -38,22 +40,22 @@ O pipeline utiliza o **Delta Lake** para gerenciar o armazenamento em três cama
 A Silver transforma o JSON cru em tabelas estruturadas utilizando `from_json` com um schema pré-definido.
 
 ### 📊 Tabelas Principais:
-1.  **`silver.pokemon`**: Atributos básicos (`height`, `weight`, `base_experience`).
+1.  **`silver.pokemon`**: Atributos básicos. A API devolve altura em decímetros e peso em hectogramas; a Silver converte para `height_cm` e `weight_kg`.
 2.  **`silver.pokemon_types`**: Relação normalizada Pokémon x Tipo (via `explode`).
 3.  **`silver.pokemon_stats`**: Stats base (HP, Attack, etc.) normalizados por linha.
 
-> **Boas Práticas:** Filtramos registros nulos e particionamos as tabelas por `ingestion_date` para otimizar o reprocessamento.
+> **Boas Práticas:** Filtramos registros nulos e particionamos as tabelas por `ingestion_date`. Reprocessar uma data (`replaceWhere`) substitui só aquela partição e mantém as outras.
 
 ---
 
 ## 🏆 4. Camada Gold – Métricas e Rankings
 
-Aqui os dados são transformados em valor de negócio através de **Window Functions** do PySpark.
+Aqui os dados são transformados em valor de negócio através de **Window Functions** do PySpark. A Gold lê da Silver apenas a data processada (`process_date`).
 
 - **Cálculo de Poder:** `total_power` é a soma de todos os stats base.
 - **Tier List:** Divisão dos Pokémon em quartis utilizando `ntile(4)`:
     - **Tier S**: Top 25% (Lendários e elites).
-    - **Tier A/B/C**: Distribuição baseada na performance estatística.
+    - **Tier A, B e C**: os quartis seguintes, nessa ordem.
 - **Ranking por Tipo:** Média de poder por tipo primário para identificar as classes mais fortes.
 
 ---
@@ -82,3 +84,19 @@ O pipeline é automatizado através de um Databricks Job com três tarefas seque
 - Task 1 (Bronze): Notebook de Ingestão.
 - Task 2 (Silver): Notebook de Normalização.
 - Task 3 (Gold): Notebook Analítico.
+
+Passe a mesma data para as três tarefas: `ingestion_date` na Bronze e `process_date` na Silver e na Gold (sem parâmetro, todas usam a data do dia).
+
+## 7. Testes
+
+Os testes rodam os três notebooks como estão, numa sessão local de Spark com Delta Lake. Só o que existe apenas no Databricks é simulado: `dbutils.widgets`, `display`, o catálogo `pokemons` e a PokeAPI (respostas fixas, sem rede).
+
+Eles cobrem a falha de rede na Bronze, a carga idempotente, o reprocessamento de uma data na Silver, a conversão de unidades, o tier list com os quatro tiers e a Gold lendo só a data processada.
+
+Requisitos: Python 3.12 e Java 17.
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
